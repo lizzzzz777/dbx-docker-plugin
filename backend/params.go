@@ -47,14 +47,16 @@ type pluginConfig struct {
 	SSHUsername             string `json:"ssh_username"`
 	SSHPrivateKeyPath       string `json:"ssh_private_key_path"`
 	SSHKnownHostsPath       string `json:"ssh_known_hosts_path"`
+	SSHSkipHostKeyVerify    bool   `json:"ssh_skip_host_key_verify"`
 	ReadOnly                bool   `json:"read_only"`
 	IsProduction            bool   `json:"is_production"`
 }
 
+// SocketPath 留空表示自动：本机 unix 模式按操作系统取默认入口
+//（Windows 命名管道，其余 /var/run/docker.sock），SSH 模式取对端默认。
 func (c connectionPayload) config() pluginConfig {
 	cfg := pluginConfig{
 		Protocol:   "http",
-		SocketPath: "/var/run/docker.sock",
 		APIVersion: "auto",
 		SSHPort:    22,
 	}
@@ -82,6 +84,9 @@ func (c connectionPayload) config() pluginConfig {
 	}
 	if v, ok := raw["allow_insecure_remote_http"].(bool); ok {
 		cfg.AllowInsecureRemoteHTTP = v
+	}
+	if v, ok := raw["ssh_skip_host_key_verify"].(bool); ok {
+		cfg.SSHSkipHostKeyVerify = v
 	}
 	if v, ok := raw["read_only"].(bool); ok {
 		cfg.ReadOnly = v

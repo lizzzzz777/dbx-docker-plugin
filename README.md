@@ -9,7 +9,7 @@ The UI follows the DBX interface language. It reads `dbxPlugin.locale` after the
 ## Requirements and connection security
 
 - DBX 0.6.14 or newer, Host API 1.
-- An accessible Docker Engine API. Local Docker Desktop TCP normally uses `127.0.0.1:2375`; HTTPS normally uses port 2376. Unix sockets and Unix sockets reached through SSH `nc -U` are also supported.
+- An accessible Docker Engine API. The local socket path is auto-detected per OS (Windows named pipe, macOS/Linux `/var/run/docker.sock`) — leave **Socket path** empty. Local Docker Desktop TCP normally uses `127.0.0.1:2375`; HTTPS normally uses port 2376. Unix sockets and Unix sockets reached through SSH `nc -U` are also supported.
 - Plain HTTP to a remote host is rejected unless **Allow insecure remote HTTP** is explicitly enabled. An exposed Docker daemon grants control comparable to the host user or root account. Prefer HTTPS with certificates or an SSH tunnel.
 - SSH `nc` connections verify the server key against `~/.ssh/known_hosts` by default. Set **SSH known_hosts path** if the trusted file is elsewhere.
 - Read-only connections reject Docker write operations, container terminals, and container file uploads in the Go backend.

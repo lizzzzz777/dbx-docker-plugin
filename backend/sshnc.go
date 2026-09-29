@@ -53,17 +53,9 @@ func dialSSHNC(ctx context.Context, cfg pluginConfig, password, socketPath strin
 		return nil, errors.New("Unix-over-NC requires an SSH password or private key")
 	}
 
-	knownHostsPath := cfg.SSHKnownHostsPath
-	if knownHostsPath == "" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return nil, fmt.Errorf("Cannot locate SSH known_hosts: %w", err)
-		}
-		knownHostsPath = home + string(os.PathSeparator) + ".ssh" + string(os.PathSeparator) + "known_hosts"
-	}
-	hostKeyCallback, err := knownhosts.New(knownHostsPath)
+	hostKeyCallback, err := resolveHostKeyCallback(cfg)
 	if err != nil {
-		return nil, fmt.Errorf("Cannot load SSH known_hosts %s: %w", knownHostsPath, err)
+		return nil, err
 	}
 	sshCfg := &ssh.ClientConfig{
 		User:            cfg.SSHUsername,
@@ -77,6 +69,39 @@ func dialSSHNC(ctx context.Context, cfg pluginConfig, password, socketPath strin
 		return nil, fmt.Errorf("Failed to connect SSH server %s: %w", addr, err)
 	}
 	return &sshNCBridge{client: client, socket: socketPath, sudo: sudo}, nil
+}
+
+// resolveHostKeyCallback 按配置构造主机密钥回调：显式跳过时接受任意密钥
+// （仅受信网络），否则按 known_hosts 校验，并对常见失败给出可操作的提示。
+func resolveHostKeyCallback(cfg pluginConfig) (ssh.HostKeyCallback, error) {
+	if cfg.SSHSkipHostKeyVerify {
+		return ssh.InsecureIgnoreHostKey(), nil
+	}
+	knownHostsPath := cfg.SSHKnownHostsPath
+	if knownHostsPath == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return nil, fmt.Errorf("Cannot locate SSH known_hosts: %w", err)
+		}
+		knownHostsPath = home + string(os.PathSeparator) + ".ssh" + string(os.PathSeparator) + "known_hosts"
+	}
+	callback, err := knownhosts.New(knownHostsPath)
+	if err != nil {
+		return nil, fmt.Errorf("Cannot load SSH known_hosts %s: %w", knownHostsPath, err)
+	}
+	return func(hostname string, remote net.Addr, key ssh.PublicKey) error {
+		err := callback(hostname, remote, key)
+		if err == nil {
+			return nil
+		}
+		var keyErr *knownhosts.KeyError
+		if errors.As(err, &keyErr) && len(keyErr.Want) > 0 {
+			return fmt.Errorf("SSH host key mismatch for %s: the key recorded in %s does not match the server (the server key may have changed). Remove the stale entry with 'ssh-keygen -R %s' and re-scan with 'ssh-keyscan %s >> ~/.ssh/known_hosts', or enable \"Skip SSH host key verification\" only on trusted networks",
+				hostname, knownHostsPath, hostname, hostname)
+		}
+		return fmt.Errorf("SSH host key for %s is not trusted (see %s). Add it with 'ssh-keyscan %s >> ~/.ssh/known_hosts', or enable \"Skip SSH host key verification\" only on trusted networks",
+			hostname, knownHostsPath, hostname)
+	}, nil
 }
 
 func shellQuote(s string) string {

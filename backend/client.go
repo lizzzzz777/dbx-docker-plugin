@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"runtime"
 	"strings"
 	"time"
 
@@ -56,6 +57,26 @@ func hasEnabledTunnel(c connectionPayload) bool {
 	return false
 }
 
+// localSocketDefault 返回本机 Docker 守护进程的默认入口：
+// Windows 为命名管道，macOS / Linux 为 /var/run/docker.sock。
+func localSocketDefault() string {
+	if runtime.GOOS == "windows" {
+		return "//./pipe/docker_engine"
+	}
+	return "/var/run/docker.sock"
+}
+
+// isWindowsPipePath 判断路径是否为 Windows 命名管道
+//（//./pipe/... 或 \\.\pipe\... 两种书写形式）。
+func isWindowsPipePath(p string) bool {
+	return strings.HasPrefix(strings.ReplaceAll(p, "\\", "/"), "//./pipe/")
+}
+
+// windowsPipeURLPath 把命名管道路径统一成 npipe URL 需要的 //./pipe/... 形式。
+func windowsPipeURLPath(p string) string {
+	return strings.ReplaceAll(p, "\\", "/")
+}
+
 // validate 复刻分支 config.rs 的安全约束。
 func validateConfig(c connectionPayload, cfg pluginConfig, runtime runtimeEndpoint) error {
 	switch cfg.Protocol {
@@ -67,11 +88,13 @@ func validateConfig(c connectionPayload, cfg pluginConfig, runtime runtimeEndpoi
 			return errors.New("Remote Docker HTTP is disabled. Enable insecure remote HTTP explicitly, or use HTTPS or an SSH tunnel.")
 		}
 	case "unix", "unix-over-nc", "unix-over-nc-sudo":
-		if !strings.HasPrefix(cfg.SocketPath, "/") || strings.ContainsAny(cfg.SocketPath, "\x00\n\r") {
-			return fmt.Errorf("Invalid Docker socket path: %q", cfg.SocketPath)
+		if p := cfg.SocketPath; p != "" {
+			if strings.ContainsAny(p, "\x00\n\r") || (!isWindowsPipePath(p) && !strings.HasPrefix(p, "/")) {
+				return fmt.Errorf("Invalid Docker socket path: %q", p)
+			}
 		}
 		if cfg.Protocol == "unix" {
-			// Unix 直连依赖 docker SDK 的 unix transport。
+			// 本机直连：socket 留空时按操作系统自动选择默认入口。
 		} else {
 			if strings.TrimSpace(cfg.SSHHost) == "" {
 				return errors.New("Unix-over-NC requires an SSH host (see the connection form)")
@@ -175,10 +198,23 @@ func connect(ctx context.Context, c connectionPayload, runtime runtimeEndpoint) 
 		}
 
 	case "unix":
-		opts = append(opts, client.WithHost("unix://"+cfg.SocketPath))
+		socketPath := strings.TrimSpace(cfg.SocketPath)
+		if socketPath == "" {
+			socketPath = localSocketDefault()
+		}
+		if isWindowsPipePath(socketPath) {
+			// docker SDK 的 npipe transport 直连 Windows 命名管道。
+			opts = append(opts, client.WithHost("npipe://"+windowsPipeURLPath(socketPath)))
+		} else {
+			opts = append(opts, client.WithHost("unix://"+socketPath))
+		}
 
 	case "unix-over-nc", "unix-over-nc-sudo":
-		bridge, err := dialSSHNC(ctx, cfg, c.secret("ssh_password"), cfg.SocketPath, cfg.Protocol == "unix-over-nc-sudo")
+		socketPath := cfg.SocketPath
+		if strings.TrimSpace(socketPath) == "" {
+			socketPath = "/var/run/docker.sock"
+		}
+		bridge, err := dialSSHNC(ctx, cfg, c.secret("ssh_password"), socketPath, cfg.Protocol == "unix-over-nc-sudo")
 		if err != nil {
 			return nil, err
 		}
